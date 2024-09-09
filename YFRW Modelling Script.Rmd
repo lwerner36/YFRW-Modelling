@@ -1,0 +1,1293 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Setup - load files, colours, data management
+
+```{r setup}
+library(pacman)
+p_load(readxl, tidyverse, mgcv, mgcViz, car, RColorBrewer, wesanderson, sf, terra, mapview)
+setwd("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM")
+Olary_new <- readxl::read_excel("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/Olary_new.xlsx")
+Flinders_new <- readxl::read_excel("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/Flinders_new.xlsx")
+ALA_ALL <- readxl::read_excel("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/ALA_ALL.xlsx")
+all_raw <- readxl::read_excel("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/Combined_survey.xlsx")
+# all_30 is a derivation of all_raw with counts averaged for the geometry of jaxa dem grid cells, Australian Lambert (3112)
+all_30 <- read.csv("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/all_obsBO_30_ExportTable.txt")
+```
+
+
+```{r colours}
+# choose distinct colours -  wesanderson palettes
+#  https://github.com/karthik/wesanderson
+names(wes_palettes)
+mycols_wes <- c(wes_palette("Darjeeling2"), wes_palette("Darjeeling1"),
+                wes_palette("Chevalier1"), wes_palette("BottleRocket2"), 
+                wes_palette("Moonrise1"), wes_palette("Moonrise2"), 
+                wes_palette("Moonrise3"), wes_palette("GrandBudapest1"), 
+                wes_palette("GrandBudapest2"), wes_palette("IsleofDogs1") 
+                )
+mycols_wes <- mycols_wes[-5]
+scales::show_col(mycols_wes)
+scales::show_col(mycols_wes[1:5])
+
+```
+
+```{r data prep Presence count5 Region}
+# rename grid_code to count
+names(all_30)[2] <- "count"
+# add binary presence/absence
+all_raw$Presence <- as.factor(all_raw$count > 0)
+all_30$Presence <- as.factor(all_30$count > 0)
+# add one to counts to allow log transform
+all_raw$count1 <- all_raw$count + 1
+all_30$count1 <- all_30$count + 1
+# classes
+all_raw$count5 <- floor(all_raw$count/5)
+all_raw$count5 <- ifelse(all_raw$count5 >= 5, 5, all_raw$count5)
+all_30$count5 <- floor(all_30$count/5)
+all_30$count5 <- ifelse(all_30$count5 >= 5, 5, all_30$count5)
+
+all_30 <- all_30 %>%
+  mutate(count5 = floor(count/5)) %>%
+  mutate(count1 = count + 1,
+         count5 = ifelse(count5 >= 5, 5, count5),
+         Region = ifelse(X > 545000, "Olary_Ranges", "Flinders_Gammon_Ranges"))
+ 
+hist(all_30$count)
+hist(all_30$count1)
+hist(all_30$count5)
+hist(all_raw$count)
+hist(all_raw$count5)
+hist(all_raw$count1)
+
+```
+
+
+```{r data prep groups of locations}
+# Convert table to features
+points30 <- st_as_sf(all_30, coords = c("X", "Y"), crs = 3112, remove=F)
+# generate projected layer from lat/lon to ensure it's Geoscience Lambert Australia
+points <- st_as_sf(all_raw, coords = c("lon", "lat"), crs = 4326, remove=F) %>% 
+  st_transform(3112) %>%
+  # update X and Y
+  select(-c("X", "Y")) %>% 
+  cbind(st_coordinates(.))
+
+# Create spatially disjoint groups of points
+# buffer to generate reasonably large clusters of points 10000 gives 5 
+xx <- st_buffer(points, dist = 10000, nQuadSegs = 4) %>%
+  st_union() %>%  # union to combine overlapping buffers
+  st_cast("POLYGON")  # convert multipolygon to single polygons
+
+# find groupID (polygon ID at each point)
+groupID <- unlist(st_intersects(points, xx))
+
+# add groupID to points
+points$groupID <- (as.factor(groupID))
+
+# repeat for all_30
+xx <- st_buffer(points30, dist = 10000, nQuadSegs = 4) %>%
+  st_union() %>%  # union to combine overlapping buffers
+  st_cast("POLYGON")  # convert multipolygon to single polygons
+
+# find groupID (polygon ID at each point)
+groupID <- unlist(st_intersects(points30, xx))
+
+# add groupID to points30
+points30$groupID <- (as.factor(groupID))
+
+# find number of locations per group
+sites <- points %>%
+  group_by(groupID) %>% 
+      summarise(n = n()) %>%
+  st_drop_geometry()
+sites
+
+# find number of locations per group for points30
+sites30 <- points30 %>%
+  group_by(groupID) %>% 
+      summarise(n = n()) %>%
+  st_drop_geometry()
+sites30
+rm(xx)
+gc()
+```
+
+```{r data prep nice names}
+names(points)
+#  [1] "LOCATIONID" "solar_sum"  "solar_wint" "ruggedness" "dem"        "OBJECTID"   "id"        
+#  [8] "lon"        "lat"        "time"       "Region"     "count"      "orgnl_d"    "observr"   
+# [15] "notes"      "slope"      "aspect"     "Presence"   "count1"     "count5"     "X"         
+# [22] "Y"          "geometry"   "groupID"   
+nice_names_raw <- tibble(original_names = names(points), 
+                         txt = c("LOCATIONID", "Solar Radiation, Summer", "Solar Radiation, Winter",  "Terrain Ruggedness", "Elevation",  "OBJECTID",   "id", "Longitude",   "Latitude", "time",  "Region",  "Scat count (m-2)", "orgnl_d",    "observr",    "notes",   "Terrain Slope", "Terrain Aspect","Scat Presence", "Scat count + 1", "Scat class", "x", "y", "geometry", "Group ID"))
+nice_names_raw
+
+names(points30)
+#  [1] "pointid"           "count"         "X"                 "Y"                
+#  [5] "directSolarSummer" "directSolarWinter" "rugged_clip"       "jaxa_dem"         
+#  [9] "NEW_jaxa_clip"     "Slope_NEW_DEM"     "Aspect_NEW_DEM"    "Current_Bio_1"    
+# [13] "Current_Bio12"     "Current_YFRW_SDM"  "Presence"          "count1"           
+# [17] "count5"            "Region"            "geometry"          "groupID"          
+nice_names <- tibble(original_names = names(points30),
+                       names = c("pointid", "count", "X", "Y", "solar_sum", "solar_wint", "ruggedness",  "jaxa_dem", "dem",  "slope",  "aspect", "T", "rain", "YFRW_SDM", "Presence", "count1", "count5", "Region", "geometry", "groupID"),
+                       txt = c("pointid", "Scat count (m-2)", "x", "y", 
+  "Solar Radiation, Summer", "Solar Radiation, Winter",  "Terrain Ruggedness",  "jaxa_dem", 
+  "Elevation",  "Terrain Slope",  "Terrain Aspect", "Temperature", "Rainfall", 
+  "YFRW SDM, Current Climate", "Scat Presence", "Scat count + 1", "Scat class", "Region", "geometry", "Group ID"))
+names(points30) <- nice_names$names
+nice_names
+
+write_sf(points, "C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/all_obs.shp", overwrite = TRUE)
+write_sf(points30, "C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM/all_30.shp", overwrite = TRUE)
+
+# create nice colours for Flinders and Olary
+if(nrow(sites30) == 5) {
+  site_colours <- mycols_wes[c(2,12,5,6,14)]
+} else {
+  # automatic for variable numbers
+  fg_sites <- points %>% 
+    st_drop_geometry() %>%
+    filter(Region == "Flinders_Gammon_Ranges") %>% 
+    select(groupID) %>% pull() %>%
+    unique() 
+  ol_sites <- points %>% 
+    st_drop_geometry() %>%
+    filter(Region == "Olary_Ranges") %>% 
+    select(groupID) %>% pull %>%
+    unique()
+  flinders_cols <- mycols_wes[c(3:(2 + length(fg_sites)))]
+  olary_cols <- mycols_wes[c(12:(11 + length(ol_sites)))]
+  # create colours for sites
+  site_colours <- c(flinders_cols, olary_cols)
+}
+scales::show_col(site_colours)
+
+mapview(points, zcol = "groupID", alpha = .2, col.regions = site_colours)
+mapview(points30, zcol = "groupID", alpha = .2, col.regions = site_colours)
+ggsave("points30_groups.jpg", width = 15, height = 12, units = "cm", dpi = 1200 )
+
+# create a copy with a short name and geometry dropped
+all <- points30 %>%
+  st_drop_geometry()
+all$Region <- as.factor(all$Region)
+
+
+
+```
+
+## Correlation of variables
+
+```{r correlation matrix by Region and GroupID}
+# remove sites with low number of members and take sample for better visualisation
+
+all_select <- all %>%
+  # filter(groupID %in% which(sites$n > 200)) %>%
+  sample_n(1000) %>%
+  droplevels
+
+scatterplotMatrix(~log(count1)+dem+ruggedness+slope+aspect+solar_sum+solar_wint|groupID, 
+                  data=all_select,
+                  col=site_colours,
+                  regLine=F,
+                  smooth = list(method=gamLine, k=30),
+                  cex=0.2,
+                  main="Scatter plot by spatial group"
+  )
+all_select <- points30 %>%
+  st_drop_geometry() %>%
+  # filter(groupID %in% which(sites$n > 200)) %>%
+  sample_n(1000) %>%
+  droplevels
+
+scatterplotMatrix(~log(count1)+dem+ruggedness+slope+aspect+solar_sum+solar_wint|groupID, 
+                  data=all_select,
+                  col=site_colours,
+                  regLine=F,
+                  smooth = list(method=gamLine, k=30),
+                  cex=0.2,
+                  main="Scatter plot by spatial group - 30m resampled"
+  )
+
+all_select <- points %>%
+  st_drop_geometry() %>%
+  # filter(groupID %in% which(sites$n > 200)) %>%
+  sample_n(1000) %>%
+  droplevels
+
+scatterplotMatrix(~log(count1)+dem+ruggedness+aspect+slope+solar_sum+solar_wint|Region, 
+                  data=all_select,
+                  col=c('#E69F00', 'darkblue'),
+                  regLine=F,
+                  smooth = list(method=gamLine, k=30),
+                  cex=0.2,
+                  main="Scatter plot by spatial group"
+  )
+all_select <- points30 %>%
+  st_drop_geometry() %>%
+  # filter(groupID %in% which(sites$n > 200)) %>%
+  sample_n(1000) %>%
+  droplevels
+
+scatterplotMatrix(~log(count1)+dem+ruggedness+slope+aspect+solar_sum+solar_wint|Region, 
+                  data=all_select,
+                  col=c('#E69F00', 'darkblue'),
+                  regLine=F,
+                  smooth = list(method=gamLine, k=30),
+                  cex=0.2,
+                  main="Scatter plot by spatial group - 30m resampled"
+  )
+
+
+
+
+```
+
+## Visualisation of scat counts by region
+```{r scatter plots dem_aspect}
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "aspect")) 
+lables <- nice_names$txt[vars]
+
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>% 
+  ggplot(aes(x=dem, y=aspect, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  scale_shape_manual(values=c(4, 17))+
+  # scale_color_continuous() + 
+  labs(x = lables[1], y = lables[2], title = "Flinders and Gammon Ranges") +
+  theme(legend.position="bottom") +   theme_minimal()
+all %>%
+  filter(Region == "Olary_Ranges") %>%
+  ggplot(aes(x=dem, y=aspect, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours[10:13]) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  scale_shape_manual(values=c(4, 17))+
+  # scale_color_continuous() + 
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=aspect, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  scale_shape_manual(values=c(4, 17))+
+  # scale_color_continuous() + 
+  labs(x = lables[1], y = lables[2], title = "Entire region") +
+  theme(legend.position="bottom") +   theme_minimal()
+```
+
+```{r scatter plots solar}
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "solar_sum")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=solar_sum, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 5)) +
+  labs(x = lables[1], y = lables[2]) +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "solar_wint"), which(nice_names$names == "solar_sum")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Olary_Ranges") %>%
+  ggplot(aes(x=dem, y=solar_sum, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 5)) +
+  labs(x = lables[1], y = lables[2]) +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "solar_wint")) 
+lables <- nice_names$txt[vars]
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=solar_sum, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 5)) +
+  labs(x = lables[1], y = lables[2]) +
+  theme(legend.position="bottom") +   theme_minimal()
+
+
+```
+```{r rugged slope all}
+vars <- c(which(nice_names$names == "ruggedness"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=ruggedness, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges region") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "ruggedness"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Olary_Ranges") %>%
+  ggplot(aes(x=ruggedness, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges region") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "ruggedness"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=ruggedness, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Entire region") +
+  theme(legend.position="bottom") +   theme_minimal()
+```
+
+```{r dem slope all}
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges region") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Olary_Ranges") %>%
+  ggplot(aes(x=dem, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  xlim(200,400) +
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges region") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Entire region") +
+  theme(legend.position="bottom") +   theme_minimal()
+
+
+
+# vars <- c(which(nice_names$names == "ruggedness"), which(nice_names$names == "slope")) 
+# lables <- nice_names$txt[vars]
+# all %>%
+#   # filter(Region == "Flinders_Gammon_Ranges") %>%
+#   ggplot(aes(x=dem, y=slope, shape = Presence, size = log(count1), colour = groupID)) +
+#   geom_point(alpha = .5) + 
+#   scale_color_manual(values=site_colours) +
+#   scale_shape_manual(values=c(4, 17))+
+#   scale_size_continuous(range = c(0.5, 3)) +
+#   xlim(200,400) +
+#   labs(x = lables[1], y = lables[2], title = "Entire region") +
+#   theme(legend.position="bottom") +   theme_minimal()
+
+
+```
+
+```{r Appendix dem ruggedness all}
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "ruggedness")) 
+lables <- nice_names$txt[vars]
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=ruggedness, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(16, 3))+
+  scale_size_continuous(range = c(0.1, 2)) +
+  labs(x = lables[1], y = lables[2], title = "Entire region") +
+  theme(legend.position="bottom") +   theme_minimal()
+ggsave("dem_rug_FGgroups.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  ggplot(aes(x=dem, y=ruggedness, shape = Presence, size = log(count1), colour = groupID)) +
+  geom_point(alpha = .5) + 
+  scale_color_manual(values=site_colours) +
+  scale_shape_manual(values=c(16, 3))+
+  scale_size_continuous(range = c(0.1, 2)) +
+  labs(x = lables[1], y = lables[2], title = "Entire region") +
+  theme(legend.position="bottom") +   theme_minimal()
+ggsave("dem_rug_allgroups.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+```
+
+```{r Figure presence binary colours dem ruggednes}
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "ruggedness")) 
+lables <- nice_names$txt[vars]
+
+# all %>%
+#   filter(Region == "Olary_Ranges") %>%
+#   # mutate(Presence = as.factor(count > 0)) %>%
+#   ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+#   geom_point(alpha = 0.5) + 
+#   scale_color_manual(values=c('#E69F00', 'darkblue')) +
+#   scale_shape_manual(values=c(4, 17))+
+#   scale_size_manual(values=c(.5, 1))+
+#   labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+#   theme(legend.position="bottom") + 
+#   theme_minimal()
+# 
+# vars <- c("ruggedness", "slope")
+# vars_i <- which(nice_names$names %in% vars)
+# lables <- nice_names$txt[vars_i]
+all %>%
+  filter(Region != "Flinders_Gammon_Ranges") %>%
+  mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(16, 3))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+ggsave("dem_rug_OL.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(16, 3))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+ggsave("dem_rug_FG.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(16, 3))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Entire area") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+ggsave("dem_rug_all.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+```
+
+
+```{r presence binary colours dem ruggednes}
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "ruggedness")) 
+lables <- nice_names$txt[vars]
+
+# all %>%
+#   filter(Region == "Olary_Ranges") %>%
+#   # mutate(Presence = as.factor(count > 0)) %>%
+#   ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+#   geom_point(alpha = 0.5) + 
+#   scale_color_manual(values=c('#E69F00', 'darkblue')) +
+#   scale_shape_manual(values=c(4, 17))+
+#   scale_size_manual(values=c(.5, 1))+
+#   labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+#   theme(legend.position="bottom") + 
+#   theme_minimal()
+# 
+# vars <- c("ruggedness", "slope")
+# vars_i <- which(nice_names$names %in% vars)
+# lables <- nice_names$txt[vars_i]
+
+# all %>%
+#   filter(Region == "Flinders_Gammon_Ranges") %>%
+#   filter(Presence == T) %>%
+#   ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Region, colour = Presence)) +
+#   geom_point(alpha = 0.5) + 
+#   scale_color_manual(values=c('#E69F00', 'darkblue')) +
+#   scale_shape_manual(values=c(4, 17))+
+#   scale_size_manual(values=c(.5, 1))+
+#   labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges") +
+#   theme(legend.position="bottom") + 
+#   theme_minimal()
+
+# ggsave("dem_rug_FG_PA.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  # filter(Presence == "TRUE") %>%
+  ggplot(aes(x=dem, y=ruggedness, size = Region, shape = Region, colour = Presence)) +
+  geom_point(alpha = 1) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_manual(values=c(2, 1))+
+  xlim(200,400) +
+  labs(x = lables[1], y = lables[2], title = "Entire area") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+
+# ggsave("dem_rug_OR_PA.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+```
+
+
+```{r presence binary colours dem slope}
+
+vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "slope")) 
+lables <- nice_names$txt[vars]
+
+all %>%
+  filter(Region == "Olary_Ranges") %>%
+  # mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+  theme(legend.position="bottom") +
+  theme_minimal()
+# 
+# vars <- c("ruggedness", "slope")
+# vars_i <- which(nice_names$names %in% vars)
+# lables <- nice_names$txt[vars_i]
+
+all %>%
+  filter(Region == "Flinders_Gammon_Ranges") %>%
+  mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=slope, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+
+# ggsave("dem_rug_FG_slp_PA.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+all %>%
+  # filter(Region == "Flinders_Gammon_Ranges") %>%
+  mutate(Presence = as.factor(count > 0)) %>%
+  ggplot(aes(x=dem, y=slope, size = Presence, shape = Presence, colour = Presence)) +
+  geom_point(alpha = 0.5) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue')) +
+  scale_shape_manual(values=c(4, 17))+
+  scale_size_manual(values=c(.5, 1))+
+  labs(x = lables[1], y = lables[2], title = "Entire area") +
+  theme(legend.position="bottom") + 
+  theme_minimal()
+
+# ggsave("dem_rug_OR_slp_PA.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+
+```
+# Statistics
+## Test plots by group
+```{r test plot_smooths, eval = F}
+# https://cran.r-project.org/web/packages/tidymv/vignettes/plot-smooths.html
+
+# library(ggplot2)
+# theme_set(theme_bw())
+# library(dplyr)
+# library(mgcv)
+# remotes::install_github(
+#   "stefanocoretta/tidymv",
+#   build_vignettes = TRUE
+# )
+p_load(tidymv)
+# set.seed(10)
+data <- gamSim(4)
+#> Factor `by' variable example
+model <- gam(
+  y ~
+    fac +
+    s(x2) +
+    s(x2, by = fac) +
+    s(x0),
+  data = data
+)
+plot_smooths(
+  model = model,
+  series = x2,
+  comparison = fac
+) +
+  theme(legend.position = "top")
+
+data("pois_df")
+pois_gam <- gam(y ~ s(x, by = fac), data = pois_df, family = poisson)
+
+# We can now plot on the response scale using transform = exp.
+
+plot_smooths(pois_gam, x, fac, transform = exp, series_length = 70) +
+  theme(legend.position = "top")
+
+
+scats_gam <- gam(log(count1) ~ s(dem) + s(dem, by = Region), data = all, family = tw)
+
+plot_smooths(scats_gam, dem, Region) +
+  theme(legend.position = "top")
+
+
+```
+```{r sequence of models 0 - dem}
+F0D <- gam(log(count1) ~ s(dem) + Region , data = all,  method = "REML", family = tw())
+summary(F0D)
+FP <- getViz(F0D)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r sequence of models 0 - ruggedness}
+F0R <- gam(log(count1) ~ s(ruggedness) + Region , data = all,  method = "REML", family = tw())
+summary(F0R)
+FP <- getViz(F0R)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+```{r sequence of models 0 - slope}
+F0S <- gam(log(count1) ~ s(slope) + Region , data = all,  method = "REML", family = tw())
+summary(F0S)
+FP <- getViz(F0S)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r sequence of models 0 - aspect}
+F0A <- gam(log(count1) ~ s(aspect) + Region , data = all,  method = "REML", family = tw())
+summary(F0A)
+FP <- getViz(F0A)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r sequence of models 0 - solar wint}
+F0SW <- gam(log(count1) ~ s(solar_wint) + Region , data = all,  method = "REML", family = tw())
+summary(F0SW)
+FP <- getViz(F0SW)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r sequence of models 0 - solar sum}
+F0SS <- gam(log(count1) ~ s(solar_sum) + Region , data = all,  method = "REML", family = tw())
+summary(F0SS)
+FP <- getViz(F0SS)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+# Statistical modelling
+```{r sequence of models 2}
+F2 <- gam(log(count1) ~ s(dem) + s(slope) + Region, data = all,  method = "REML", family = tw())
+summary(F2)
+FP <- getViz(F2)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F0D, F2, test = "F")
+```
+
+
+```{r sequence of models FBase}
+FBase <- gam(log(count1) ~ s(dem) +s(ruggedness) + Region , data = all,  method = "REML", family = tw())
+summary(FBase)
+FP <- getViz(FBase)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F2, FBase, test = "F")
+```
+```{r sequence dem + rug + slope}
+FDRS <- gam(log(count1) ~ s(dem) + s(ruggedness) + s(slope) + Region , data = all,  method = "REML", family = tw())
+FP <- getViz(FDRS)
+
+summary(FDRS)
+
+print(plot(FP, allTerms = T), pages = 1)
+
+gam.check(FP)
+
+anova.gam(FBase, FDRS, test = "F")
+
+
+```{r sequence dem rug interactions}
+F3 <- gam(log(count1) ~ s(dem) + s(ruggedness) + te(dem, ruggedness) + Region , data = all,  method = "REML", family = tw())
+summary(F3)
+FP <- getViz(F3)
+
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(FBase, F3, test = "F")
+```
+```{r sequence dem rug groups}
+Fg0 <- gam(log(count1) ~ s(dem) + s(ruggedness) + groupID , data = all,  method = "REML", family = tw())
+summary(Fg0)
+FP <- getViz(Fg0)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+Fg <- gam(log(count1) ~ s(dem, by = groupID) + s(ruggedness, by = groupID) + ti(dem,ruggedness, by = groupID),  data = all,  method = "REML", family = tw())
+summary(Fg)
+FP <- getViz(Fg)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(FBase, Fg0, test = "F")
+anova.gam(FBase, Fg, test = "F")
+```
+
+
+
+```{r sequence of models 4}
+F4a <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(aspect) + Region, data = all,  method = "REML", family = tw())
+summary(F4a)
+FP <- getViz(F4a)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+anova.gam(FBase, F4a, test = "F")
+
+F4b <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(solar_wint) + Region, data = all,  method = "REML", family = tw())
+summary(F4b)
+FP <- getViz(F4b)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+anova.gam(FBase, F4b, test = "F")
+
+F4c <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(solar_sum) + Region, data = all,  method = "REML", family = tw())
+summary(F4c)
+FP <- getViz(F4c)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+anova.gam(FBase, F4c, test = "F")
+
+anova.gam(FBase, F4a, test = "F")
+anova.gam(FBase, F4b, test = "F")
+anova.gam(FBase, F4c, test = "F")
+anova.gam(F4a, F4b, test = "F")
+
+```
+
+```{r sequence of models 5}
+F5 <- gam(log(count1) ~ s(dem) + s(slope) + s(ruggedness) + s(solar_wint) + s(solar_sum) + Region, data = all,  method = "REML", family = tw())
+summary(F5)
+FP <- getViz(F5)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F4, F5, test = "F")
+```
+
+```{r sequence of models - using aspect}
+#using aspect instead of solar radiations
+FA <- gam(log(count1) ~ s(dem) + s(slope) + s(ruggedness) + s(aspect) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FA)
+FP <- getViz(FA)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F5, FA, test = "F")
+```
+
+```{r sequence of models - using solar radiations and not ruggedness}
+
+FS <- gam(log(count1) ~ s(dem) + s(slope) + s(solar_wint) + s(solar_sum) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FS)
+FP <- getViz(FS)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F5, FS, test = "F")
+```
+
+```{r sequence of models - using aspect and not ruggedness}
+#using aspect instead of solar radiations
+FA2 <- gam(log(count1) ~ s(dem) + s(slope) + s(aspect) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FA2)
+FP <- getViz(FA2)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(F5, FA2, test = "F")
+```
+```{r sequence of models - dem + ruggedness + aspect}
+
+FR <- gam(log(count1) ~ s(dem) + s(ruggedness) + s(aspect) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FR)
+FP <- getViz(FR)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+# anova.gam(F5, FR, test = "F")
+anova.gam(FA2, FR, test = "F")
+```
+```{r sequence of models - dem + ruggedness versus dem + slope}
+
+FDR <- gam(log(count1) ~ s(dem) + s(ruggedness) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FDR)
+FP <- getViz(FDR)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+FDS <- gam(log(count1) ~ s(dem) + s(slope) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FDS)
+FP <- getViz(FDS)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+
+anova.gam(FDS, FDR, test = "F")
+```
+```{r sequence of models - te dem, ruggedness}
+
+all_sel <- all %>% filter(Region == "Olary_Ranges")
+
+FF <- gam(log(count1) ~ te(dem, ruggedness) + Region +  te(X,Y), data = all,  method = "REML", family = tw())
+summary(FF)
+FP <- getViz(FF)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+anova.gam(FA, FF, test = "F")
+anova.gam(F5, FF, test = "F")
+```
+```{r base model plus groups}
+
+
+```
+
+# misc statistical tests and unused analyses
+
+```{r compare ranges}
+all_sel <- all %>% filter(Region == "Olary_Ranges")
+FOl <- gam(log(count1) ~ te(dem, ruggedness), data = all_sel,  method = "REML", family = tw())
+summary(FOl)
+FP <- getViz(FOl)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+# 
+# FOl <- gam(log(count1) ~ s(dem) + s(ruggedness) + ti(dem, ruggedness) +  te(X,Y, k=10), data = all_sel,  method = "REML", family = tw())
+# summary(FOl)
+# FP <- getViz(FOl)
+# print(plot(FP, allTerms = T), pages = 1)
+# gam.check(FP)
+
+
+all_sel <- all %>% filter(Region != "Olary_Ranges")
+FFG <- gam(log(count1) ~ te(dem, ruggedness), data = all_sel,  method = "REML", family = tw())
+summary(FFG)
+FP <- getViz(FFG)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+
+
+```{r gam Presence with interactions by groupID}
+F0p <- gam(Presence ~ s(dem,ruggedness) + ti(dem, ruggedness, by=groupID) +  te(X,Y), data = all, method = "REML", family = binomial(link = "logit"))
+summary(F0p)
+FP <- getViz(F0p)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r gam logcount1 with interactions by groupID}
+# log(count1) as a function of dem and ruggedness without interactions and smooth plots for each group
+F0c <- gam(log(count1) ~ s(dem, k=20) + s(ruggedness, k=20) + s(dem, k=20, by = groupID) + s(ruggedness, k=20,  by=groupID) +  te(X,Y), data = all, method = "REML", family = tw())
+summary(F0c)
+
+FP <- getViz(F0c)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+# plot_smooths(F0c, dem, groupID, transform = exp, series_length = 70) +
+#   theme(legend.position = "top")
+
+```
+
+
+
+```{r gam Presence}
+all_binary <- all %>%
+  filter(Region == "Flinders_Gammon_Ranges") 
+
+F1 <- gam(Presence ~ s(dem, by=groupID) + s(ruggedness, by=groupID) + s(aspect, by=groupID) + ti(dem, ruggedness) + ti(dem, aspect) + te(X,Y), data = all, method = "REML", family = binomial(link = "logit"))
+summary(F1)
+FP <- getViz(F1)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+F2 <- gam(Presence ~ s(dem) + s(ruggedness) + s(aspect) + ti(dem, ruggedness) + ti(dem, aspect), data = all, method = "REML", family = binomial(link = "logit"))
+summary(F2)
+FP <- getViz(F2)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+F3 <- gam(Presence ~ s(dem) + s(ruggedness) + s(solar_sum) + s(solar_wint) + ti(dem, ruggedness) + ti(dem, solar_sum), data = all, method = "REML", family = binomial(link = "logit"))
+summary(F3)
+FP <- getViz(F3)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+F4 <- gam(Presence ~ s(dem) + s(ruggedness) + s(solar_wint) + ti(dem, ruggedness) + ti(dem, solar_wint) + ti(solar_wint, ruggedness) + groupID, data = all, method = "REML", family = binomial(link = "logit"))
+summary(F4)
+FP <- getViz(F4)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+# plot_smooths(F4, series = all_binary, )
+
+```
+```{r nlme spatial model test}
+library(nlme)
+
+# Simulated data example
+set.seed(123)
+n <- 100
+coords <- data.frame(x = runif(n), y = runif(n))
+response <- rnorm(n)
+group <- sample(1:10, n, replace = TRUE)  # Example grouping variable
+predictors <- data.frame(var1 = runif(n), var2 = runif(n))
+listw <- nb2listw(knn2nb(knearneigh(coords, k = 4)))
+
+# Combine into a data frame
+sp_data <- data.frame(response = response, var1 = predictors$var1, var2 = predictors$var2, 
+                      x = coords$x, y = coords$y, group = factor(group))
+
+# Incorrect model specification that may cause the error
+# model <- lme(response ~ var1 + var2, data = sp_data, random = ~ 1 | x + y)  # This is incorrect
+simple_model <- glm(response ~ var1 + var2, data = sp_data)
+summary(simple_model)
+
+# Correct model specification
+model <- lme(response ~ var1 + var2, data = sp_data, random = ~ 1 | group,
+             correlation = corSpher(form = ~ x + y))
+
+summary(model)
+
+
+p_load(spatialreg)
+
+# Fit a spatial lag model
+spatial_lag_model <- lagsarlm(response ~ var1 + var2, data = sp_data, listw = listw)
+summary(spatial_lag_model)
+
+
+```
+
+
+```{r Presence mixed model with spatial autocorrelation}
+p_load(spdep, nlme)
+coords <- st_coordinates(points30)
+listw <- nb2listw(knn2nb(knearneigh(coords, k = 8)))
+# anova(Fmgroup$lme, Fm$lme)
+
+Fm <- lme(Presence ~ te(dem, ruggedness) + s(solar_wint), data = all, method = "REML", family = binomial(link = "logit"))
+
+Fmxygroup <- gamm(log(count1) ~ s(dem) + s(ruggedness) + s(solar_wint), data = all, correlation = corSpher(form = ~ X + Y))
+
+
+summary(Fmgroup$gam)
+summary(Fmgroup$lme)
+FP <- getViz(Fmgroup$gam)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+summary(Fm$gam)
+summary(Fm$lme)
+FP <- getViz(Fm$gam)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+```
+
+
+```{r Presence mixed model with spatial autocorrelation 2}
+all_res <- all %>%
+  mutate(resFm = residuals(Fm$lme, type = "normalized"))
+ggplot(all_res) +
+  geom_point(aes(x = X, y = Y, color = resFm)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", limits = c(-3, 3), midpoint = 0) +
+  labs(title = "Spatial Distribution of Residuals")
+
+nb <- dnearneigh(st_coordinates(points30), 0, 500)
+lw <- nb2listw(nb)
+model1 <- spautolm(log(count1) ~ dem + I(dem^2) * ruggedness, data = points30, listw = lw)
+model <- errorsarlm(log(count1) ~ dem * ruggedness + I(dem^2), data = points30, listw = lw)
+summary(model)
+
+
+min(all$resFm)
+```
+
+# initial models, superseded
+
+```{r gam Lauren F G}
+#GAMs using tensor products
+all_binary <- all %>%
+  filter(Region == "Flinders_Gammon_Ranges") 
+
+F <- gamm(Presence ~ s(dem, k=30) + s(ruggedness, k=30) + s(aspect, k=30) + s(slope, k=30) + ti(dem, ruggedness) + ti(dem, aspect) + ti(dem, slope) + ti(ruggedness, slope), data = all_binary, method = "REML", family = binomial(link = "logit"), correlation=corSpher(form = ~ X + Y))
+
+anova(mod1$lme, mod2$lme) 
+
+summary(F)
+FP <- getViz(F)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+
+```
+
+```{r gam Lauren O}
+#GAMs using tensor products
+
+all_binary <- all %>%
+  mutate(Presence = count > 0) %>%
+  filter(Region == "Olary_Ranges") 
+F <- gam(Presence ~ s(dem, k=30) + s(ruggedness) + s(aspect) + ti(dem, ruggedness) + ti(dem, aspect) + ti(dem, slope) + ti(ruggedness, slope), data = all_binary, method = "REML", family = binomial())
+
+summary(F)
+FP <- getViz(F)
+print(plot(FP, allTerms = T), pages = 1)
+gam.check(FP)
+```
+
+
+
+```{r}
+library(mgcv)
+set.seed(1) 
+dat <- gamSim(1,n=400,scale=2)
+
+## fit a GAM with quite low `k'
+b<-gam(y~s(x0,k=6)+s(x1,k=6)+s(x2,k=6)+s(x3,k=6),data=dat)
+plot(b,pages=1,residuals=TRUE) ## hint of a problem in s(x2)
+
+## the following suggests a problem with s(x2)
+gam.check(b)
+
+
+
+## Another approach (see below for more obvious method)....
+## check for residual pattern, removeable by increasing `k'
+## typically `k', below, chould be substantially larger than 
+## the original, `k' but certainly less than n/2.
+## Note use of cheap "cs" shrinkage smoothers, and gamma=1.4
+## to reduce chance of overfitting...
+rsd <- residuals(b)
+gam(rsd~s(x0,k=40,bs="cs"),gamma=1.4,data=dat) ## fine
+gam(rsd~s(x1,k=40,bs="cs"),gamma=1.4,data=dat) ## fine
+gam(rsd~s(x2,k=40,bs="cs"),gamma=1.4,data=dat) ## `k' too low
+gam(rsd~s(x3,k=40,bs="cs"),gamma=1.4,data=dat) ## fine
+```
+
+```{r gam log}
+
+F2 <- gam(Presence ~ s(ruggedness) + s(slope) + s(dem) + 
+            ti(dem, ruggedness) + ti(dem, slope) + groupID, 
+          data = all_select, method = "REML", family = logit)
+summary(F2)
+plot(F2)
+FP2 <- getViz(F2)
+gam.check(F2, rep = 500)
+```
+
+```{r gamm test}
+## Add a factor to the linear predictor, to be modelled as random
+
+# dat <- gamSim(6,n=200,scale=.2,dist="poisson")
+b2 <- gamm(count1 ~ s(dem) + s(ruggedness)+s(slope),family=Tweedie(1.25,power(.1)), 
+           data=all,random=list(groupID=~1))
+plot(b2$gam,pages=1)
+gam.check(b2$gam)
+# fac <- dat$Region
+vis.gam(b2$gam)
+
+summary(b2$lme) # details of underlying lme fit
+summary(b2$gam) # gam style summary of fitted model
+anova(b2$gam) 
+gam.check(b2$gam) # simple checking plots
+```
+
+
+```{r gamm test2}
+## Add a factor to the linear predictor, to be modelled as random
+
+# dat <- gamSim(6,n=200,scale=.2,dist="poisson")
+b2 <- gamm(count ~ te(dem,ruggedness,slope),family=Tweedie(1.25,power(.1)), 
+           data=all,random=list(groupID=~1))
+plot(b2$gam,pages=1)
+gam.check(b2$gam)
+# fac <- dat$Region
+vis.gam(b2$gam)
+
+summary(b2$lme) # details of underlying lme fit
+summary(b2$gam) # gam style summary of fitted model
+anova(b2$gam) 
+gam.check(b2$gam) # simple checking plots
+```
+
+```{r gam with explicit interaction term}
+F2 <- gam(count ~ s(ruggedness) + s(slope) + s(dem) + s(solar_wint) + s(solar_sum) + ti(ruggedness, dem, solar_wint) + groupID, data = all, method = "REML", family = tw(link = "log"))
+summary(F2)
+plot(F2)
+FP2 <- getViz(F2)
+vis.gam(FP2, view = c("dem", "ruggedness"),  theta = 50, n.grid = 50, lwd = 0.4)
+gam.check(F2, rep = 500)
+
+```
+
+
+# stuff to delete
+
+```{r count, eval = F}
+Flinders_new %>%
+  mutate(Presence = count > 0) %>%
+  ggplot(aes(x=ruggedness, y=slope, colour = Presence)) +
+  geom_point(size = 3, shape = 15, alpha = 0.1) + 
+  scale_color_manual(values=c('#E69F00', 'darkblue'))+
+  theme(legend.position="bottom") +
+  theme(panel.background = element_blank())
+
+ggplot(ALA_ALL, aes(x=ruggedness, y=slope, color=Region, shape=Region)) +
+  geom_point(size = 4, alpha = 0.5) + 
+  scale_shape_manual(values=c(15, 16, 17, 18))+ 
+  scale_color_manual(values=c('orange', 'blue', "darkgreen", 'red'))+
+  theme(legend.position="bottom") + 
+  theme(panel.background = element_blank())
+
+#Pearson correlation test
+cor.test(ALA_ALL$aspect, ALA_ALL$slope, 
+                method = "pearson")
+
+
+```
+
+
+```{r counts, eval = F}
+#GAMs using tensor products
+F <- gam(count ~ s(dem,ruggedness) + s(I(dem*ruggedness)) + Region + I(as.factor(LOCATIONID)), data = all, method = "REML", family = tw(link = "log") )
+summary(F)
+FP <- getViz(F)
+
+F2 <- gamm(count ~ s(dem) + s(ruggedness) + s(I(dem*ruggedness)) + s(LOCATIONID, bs = "re"), data = all, method = "REML", family = tw(link = "log"))
+summary(F2)
+plot(F2)
+FP2 <- getViz(F2)
+
+F2 <- gam(count ~ s(dem, ruggedness) +  LOCATIO, data = data)
+summary(F2)
+FP2 <- getViz(F2)
+
+print(plot(FP, allTerms = T), pages = 1)
+print(plot(FP2, allTerms = T), pages = 1)
+vis.gam(FP2, view = c("dem", "ruggedness"),  theta = 50, n.grid = 50, lwd = 0.4)
+vis.gam(FP2, view = c("dem", "ruggedness"),  theta = 130, n.grid = 50, lwd = 0.4)
+plot(FP)
+
+plot(FP2)
+
+gam.check(F, rep = 500)
+summary(F)
+
+```
+
+
+
+```{r unused test parameters as variables, eval = F}
+vars <- c("ruggedness", "slope")
+vars_i <- which(nice_names$names %in% vars)
+lables <- nice_names$txt[vars_i]
+
+all %>%
+  # filter(Region == "Olary_Ranges") %>%
+  ggplot(aes(x=!!sym(vars[1]), y=!!sym(vars[2]), shape = Presence, 
+             size = log(count1), colour = groupID)) +
+  geom_point(alpha = .3) + 
+  scale_color_manual(values=site_colours) +
+  scale_size_continuous(range = c(0.5, 3)) +
+  labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
+  scale_shape_manual(values=c(4, 17)) 
+  # scale_color_continuous() + 
+```
+
+
+```{r unused distance between points, eval=F}
+
+# Try automatic clustering
+
+p_load(dbscan, sf, spdep)
+# distance matrix
+mtx_distance <- st_distance(points, points)
+st_coordinates(points)
+dist_pts <- dist(st_coordinates(points))
+
+dbscan_results2 <- dbscan((points), eps=10, minPts = 3)
+points$clust <- dbscan_results2$cluster
+mapview(points, zcol = "clust", alpha = .2)
+
+nb <- dnearneigh(points, 0, 100)
+
+p_load(cluster)
+agnes_result <- agnes(dist_pts)
+clusters <- cutree(as.hclust(agnes_result), k = 5)
+
+
+pts_clust_df <- points %>% 
+  group_by(clust) %>% 
+  summarise(c = mean(count), x = mean(X), y = mean(Y))
+
+points_clust<- st_as_sf(all_raw, coords = c("lon", "lat"), crs = 4326, remove=F)
+# generate projected layer, using Geoscience Lambert Australia and update X and Y
+points <- st_transform(points_latlon, 3112) %>%
+  select(-c("X", "Y")) %>% 
+  cbind(st_coordinates(.))
+
+dist <- units::drop_units(mtx_distance)
+dist[upper.tri(dist, diag = TRUE)] <- NA
+dist[1:10, 1:5]
+# find points with neighbours within limits
+near_list <- apply(dist,1,function (x) which(x < 10))
+pp <- unlist(near_list)
+unique(pp)
+
+nearest_neighbors <- nngeo::st_nn(points, points, k = 10)
+st_distance(points[1,], points[nearest_neighbors[[1]],])
+
+```
