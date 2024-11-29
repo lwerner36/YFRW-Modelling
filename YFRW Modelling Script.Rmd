@@ -3,20 +3,249 @@ title: "YFRW Modelling"
 output: html_notebook
 ---
 
-# Setup - load files, colours, data management
-
 ```{r setup}
 library(pacman)
-p_load(readxl, tidyverse, mgcv, mgcViz, car, RColorBrewer, wesanderson, sf, terra, mapview)
-setwd("C:/Users/laure/OneDrive/Desktop/PhD/Modelling/New GAM")
-Olary_new <- readxl::read_excel("../../../data/final/Olary_new.xlsx")
-Flinders_new <- readxl::read_excel("../../../data/final/Flinders_new.xlsx")
-ALA_ALL <- readxl::read_excel("../../../data/final/ALA_ALL.xlsx")
-all_raw <- readxl::read_excel("../../../data/final/Combined_survey.xlsx")
-# all_30 is a derivation of all_raw with counts averaged for the geometry of jaxa dem grid cells, Australian Lambert (3112)
-all_30 <- read.csv("../../../data/final/all_obsBO_30_ExportTable.txt")
+p_load(tidyverse, mgcv, mgcViz, car, RColorBrewer, wesanderson, sf, terra, mapview)
+
+# function to calculate deviance explained from model
+dx <- function(m) {
+  return(round((m$null.deviance - m$deviance) / m$null.deviance * 100, 1))
+}
+
+data_path_lauren <- "../New GAM/"
+
+all <- readxl::read_excel(paste0(data_path_lauren, "all.xlsx"))
+nice_names <- readxl::read_excel(paste0(data_path_lauren, "nicenames.xlsx"))
+
+all$Region <- as.factor(all$Region)
+all$groupID <- as.factor(all$groupID)
+
+
 ```
 
+# Statistical modelling
+```{r single variables - Table 2}
+#  [1] "pointid"     "count"       "X"           "Y"           "solar_sum"  
+#  [6] "solar_wint"  "ruggedness"  "jaxa_dem"    "dem"         "slope"      
+# [11] "aspect"      "T"           "rain"        "YFRW_SDM"    "Presence"   
+# [16] "count1"      "count5"      "Region"      "Temperature" "Rainfall"   
+# [21] "groupID"  
+
+mT <- gam(log(count1) ~ s(Temperature), data = all,  method = "REML", family = tw())
+plot(mT)
+gam.check(mT)
+summary(mT)
+
+mdem <- gam(log(count1) ~ s(dem), data = all,  method = "REML", family = tw())
+plot(mdem)
+gam.check(mdem)
+summary(mdem)
+
+mjaxadem <- gam(log(count1) ~ s(jaxa_dem), data = all,  method = "REML", family = tw())
+plot(mjaxadem)
+gam.check(mjaxadem)
+summary(mjaxadem)
+
+mrug <- gam(log(count1) ~ s(ruggedness), data = all,  method = "REML", family = tw())
+plot(mrug)
+gam.check(mrug)
+summary(mrug)
+
+mslope <- gam(log(count1) ~ s(slope), data = all,  method = "REML", family = tw())
+plot(mslope)
+gam.check(mslope)
+summary(mslope)
+
+maspect <- gam(log(count1) ~ s(aspect), data = all,  method = "REML", family = tw())
+plot(maspect)
+gam.check(maspect)
+summary(maspect)
+
+msolwin <- gam(log(count1) ~ s(solar_wint), data = all,  method = "REML", family = tw())
+plot(msolwin)
+gam.check(msolwin)
+summary(msolwin)
+
+msolsum <- gam(log(count1) ~ s(solar_sum), data = all,  method = "REML", family = tw())
+plot(msolsum)
+gam.check(msolsum)
+summary(msolsum)
+
+mTR <- gam(log(count1) ~ s(Temperature, by = Region), data = all,  method = "REML", family = tw())
+plot(mTR)
+gam.check(mTR)
+summary(mTR)
+
+mdemR <- gam(log(count1) ~ s(dem, by = Region), data = all,  method = "REML", family = tw())
+plot(mdemR)
+gam.check(mdemR)
+summary(mdemR)
+
+mjaxademR <- gam(log(count1) ~ s(jaxa_dem, by = Region), data = all,  method = "REML", family = tw())
+plot(mjaxademR)
+gam.check(mjaxademR)
+summary(mjaxademR)
+
+mrugR <- gam(log(count1) ~ s(ruggedness, by = Region), data = all,  method = "REML", family = tw())
+plot(mrugR)
+gam.check(mrugR)
+summary(mrugR)
+
+mslopeR <- gam(log(count1) ~ s(slope, by = Region), data = all,  method = "REML", family = tw())
+plot(mslopeR)
+gam.check(mslopeR)
+summary(mslopeR)
+
+maspectR <- gam(log(count1) ~ s(aspect, by = Region), data = all,  method = "REML", family = tw())
+plot(maspectR)
+gam.check(maspectR)
+summary(maspectR)
+
+msolwinR <- gam(log(count1) ~ s(solar_wint, by = Region), data = all,  method = "REML", family = tw())
+plot(msolwinR)
+gam.check(msolwinR)
+summary(msolwinR)
+
+msolsumR <- gam(log(count1) ~ s(solar_sum, by = Region), data = all,  method = "REML", family = tw())
+plot(msolsumR)
+gam.check(msolsumR)
+summary(msolsumR)
+
+AT <- anova.gam(mT, mTR, test = "F")$`Pr(>Chi)`[2]
+adem <- anova.gam(mdem, mdemR, test = "F")$`Pr(>Chi)`[2]
+ajaxadem <- anova.gam(mjaxadem, mjaxademR, test = "F")$`Pr(>Chi)`[2]
+arug <- anova.gam(mrug, mrugR, test = "F")$`Pr(>Chi)`[2]
+aslope <- anova.gam(mslope, mslopeR, test = "F")$`Pr(>Chi)`[2]
+aaspect <- anova.gam(maspect, maspectR, test = "F")$`Pr(>Chi)`[2]
+asolwin <- anova.gam(msolwin, msolwinR, test = "F")$`Pr(>Chi)`[2]
+asolsum <- anova.gam(msolsum, msolsumR, test = "F")$`Pr(>Chi)`[2]
+
+anovaSig <- c(AT, adem, ajaxadem, arug, aslope, aaspect, asolwin, asolsum)
+
+dev_ex_single <- c(dx(mT), dx(mdem), dx(mjaxadem), dx(mrug), dx(mslope), dx(maspect), dx(msolwin), dx(msolsum))
+
+dev_ex_singleR <- c(dx(mTR), dx(mdemR), dx(mjaxademR), dx(mrugR), dx(mslopeR), dx(maspectR), dx(msolwinR), dx(msolsumR))
+
+Table2 <- tibble(variable = nice_names$txt[c(19, 9, 8, 7, 10, 11, 6, 5)], 
+                 'Deviance explained' = dev_ex_single, 
+                 'Deviance explained by region' = dev_ex_singleR,
+                 'Significance, regional difference' = anovaSig)
+
+writexl::write_xlsx(Table2, "table2.xlsx")
+```
+
+
+```{r adding variables - Table 3}
+# F2 <- gam(log(count1) ~ s(Temperature) + s(ruggedness), data = all,  method = "REML", family = tw())
+# print(mgcViz::plot.gamViz((F2)), page = 1)
+# gam.check(F2)
+# summary((F2))
+# 
+# F2R <- gam(log(count1) ~ s(Temperature, by = Region) +  s(ruggedness, by=Region),
+#            data = all,  method = "REML", family = tw())
+# #print(plot((F2R)), pages = 1)
+# print(mgcViz::plot.gamViz(F2R), page = 1)
+# gam.check(F2R)
+# summary((F2R))
+
+F2i <- gam(log(count1) ~ te(Temperature, ruggedness), data = all,  method = "REML", family = tw())
+mgcViz::plot.gamViz((F2i)) %>% print(page = 1)
+gam.check(F2i)
+summary((F2i))
+
+F2iR <- gam(log(count1) ~ 
+             te(Temperature, ruggedness, by = Region), data = all,  method = "REML", 
+            family = tw())
+#print(plot((F2iR)), pages = 1)
+mgcViz::plot.gamViz(F2iR) %>% print(page = 1)
+
+gam.check(F2iR)
+summary.gam((F2iR))
+
+
+F2slope <- gam(log(count1) ~ te(Temperature, ruggedness) + 
+                 s(slope)  , data = all,  method = "REML", family = tw())
+
+F2aspect <- gam(log(count1) ~  te(Temperature, ruggedness) + 
+                 s(aspect),
+                data = all,  method = "REML", family = tw())
+
+F2solsum <- gam(log(count1) ~  te(Temperature, ruggedness) + 
+                 s(solar_sum), 
+                data = all,  method = "REML", family = tw())
+
+F2solwin <- gam(log(count1) ~  te(Temperature, ruggedness) +  
+                 s(solar_wint), 
+                data = all,  method = "REML", family = tw())
+
+            
+F2slopeR <- gam(log(count1) ~  te(Temperature, ruggedness, by=Region) + 
+                 s(slope, by=Region)  , data = all,  method = "REML", family = tw())
+
+F2aspectR <- gam(log(count1) ~ te(Temperature, ruggedness, by=Region) + 
+                 s(aspect, by=Region)  , data = all,  method = "REML", family = tw())
+
+F2solsumR <- gam(log(count1) ~ te(Temperature, ruggedness, by=Region) + 
+                 s(solar_sum, by=Region)  , data = all,  method = "REML", family = tw())
+
+F2solwinR <- gam(log(count1) ~ te(Temperature, ruggedness, by=Region) + 
+                 s(solar_wint, by=Region)  , data = all,  method = "REML", family = tw())
+
+base_models <- c(dx(F2), dx(F2R), dx(F2i), dx(F2iR))
+
+
+dev_ex_2 <- c(dx(F2i), dx(F2slope), dx(F2aspect), dx(F2solwin), dx(F2solsum))
+dev_ex_2R <- c(dx(F2iR), dx(F2slopeR), dx(F2aspectR), dx(F2solwinR), dx(F2solsumR))
+              
+
+a2R <- anova.gam(F2i, F2iR, test = "F")
+#a2i <- anova.gam(F2, F2i, test = "F")
+
+a2slope <- anova.gam(F2i, F2slope, test = "F")
+a2aspect <- anova.gam(F2i, F2aspect, test = "F")
+a2solsum <- anova.gam(F2i, F2solsum, test = "F")
+a2solwin <- anova.gam(F2i, F2solwin, test = "F")
+
+a2slopeR <- anova.gam(F2slope, F2slopeR, test = "F")
+a2aspectR <- anova.gam(F2aspect, F2aspectR, test = "F")
+a2solsumR <- anova.gam(F2solsum, F2solsumR, test = "F")
+a2solwinR <- anova.gam(F2solwin, F2solwinR, test = "F")
+
+p_ <- function(mod) {return(mod$`Pr(>Chi)`[2])}
+
+anova_sig2 <- c(NA, p_(a2slope), p_(a2aspect), p_(a2solsum), p_(a2solwin))
+regdiff_sig2R <- c(p_(a2R), p_(a2slopeR), p_(a2aspectR), p_(a2solsumR), p_(a2solwinR))
+
+Table3 <- tibble(variable = c("Base model", nice_names$txt[c(10, 11, 6, 5)]),
+                 'Deviance explained' = dev_ex_2,
+                 'Deviance explained +region' = dev_ex_2R,
+                 'Significance, regional difference' = regdiff_sig2R,
+                 'ANOVA p-value' = anova_sig2)
+
+
+writexl::write_xlsx(Table3, "table3.xlsx")
+
+```
+
+
+## For Supplementary Material Fig S2
+```{r setup}
+library(pacman)
+p_load(tidyverse, mgcv, mgcViz, car, RColorBrewer, wesanderson, sf, terra, mapview)
+
+# function to calculate deviance explained from model
+dx <- function(m) {
+  return(round((m$null.deviance - m$deviance) / m$null.deviance * 100, 1))
+}
+
+data_path_lauren <- "../New GAM/"
+
+all <- readxl::read_excel(paste0(data_path_lauren, "all.xlsx"))
+nice_names <- readxl::read_excel(paste0(data_path_lauren, "nicenames.xlsx"))
+all$Region <- as.factor(all$Region)
+all$groupID <- as.factor(all$groupID)
+
+```
 
 ```{r colours}
 # choose distinct colours -  wesanderson palettes
@@ -32,129 +261,18 @@ mycols_wes <- mycols_wes[-5]
 scales::show_col(mycols_wes)
 scales::show_col(mycols_wes[1:5])
 
-```
-
-```{r data prep Presence count5 Region}
-# rename grid_code to count
-names(all_30)[2] <- "count"
-# add binary presence/absence
-all_raw$Presence <- as.factor(all_raw$count > 0)
-all_30$Presence <- as.factor(all_30$count > 0)
-# add one to counts to allow log transform
-all_raw$count1 <- all_raw$count + 1
-all_30$count1 <- all_30$count + 1
-# classes
-all_raw$count5 <- floor(all_raw$count/5)
-all_raw$count5 <- ifelse(all_raw$count5 >= 5, 5, all_raw$count5)
-all_30$count5 <- floor(all_30$count/5)
-all_30$count5 <- ifelse(all_30$count5 >= 5, 5, all_30$count5)
-
-all_30 <- all_30 %>%
-  mutate(count5 = floor(count/5)) %>%
-  mutate(count1 = count + 1,
-         count5 = ifelse(count5 >= 5, 5, count5),
-         Region = ifelse(X > 545000, "Olary_Ranges", "Flinders_Gammon_Ranges"))
- 
-hist(all_30$count)
-hist(all_30$count1)
-hist(all_30$count5)
-hist(all_raw$count)
-hist(all_raw$count5)
-hist(all_raw$count1)
-
-```
-
-
-```{r data prep groups of locations}
-# Convert table to features
-points30 <- st_as_sf(all_30, coords = c("X", "Y"), crs = 3112, remove=F)
-# generate projected layer from lat/lon to ensure it's Geoscience Lambert Australia
-points <- st_as_sf(all_raw, coords = c("lon", "lat"), crs = 4326, remove=F) %>% 
-  st_transform(3112) %>%
-  # update X and Y
-  select(-c("X", "Y")) %>% 
-  cbind(st_coordinates(.))
-
-# Create spatially disjoint groups of points
-# buffer to generate reasonably large clusters of points 10000 gives 5 
-xx <- st_buffer(points, dist = 10000, nQuadSegs = 4) %>%
-  st_union() %>%  # union to combine overlapping buffers
-  st_cast("POLYGON")  # convert multipolygon to single polygons
-
-# find groupID (polygon ID at each point)
-groupID <- unlist(st_intersects(points, xx))
-
-# add groupID to points
-points$groupID <- (as.factor(groupID))
-
-# repeat for all_30
-xx <- st_buffer(points30, dist = 10000, nQuadSegs = 4) %>%
-  st_union() %>%  # union to combine overlapping buffers
-  st_cast("POLYGON")  # convert multipolygon to single polygons
-
-# find groupID (polygon ID at each point)
-groupID <- unlist(st_intersects(points30, xx))
-
-# add groupID to points30
-points30$groupID <- (as.factor(groupID))
-
-# find number of locations per group
-sites <- points %>%
-  group_by(groupID) %>% 
-      summarise(n = n()) %>%
-  st_drop_geometry()
-sites
-
-# find number of locations per group for points30
-sites30 <- points30 %>%
-  group_by(groupID) %>% 
-      summarise(n = n()) %>%
-  st_drop_geometry()
-sites30
-rm(xx)
-gc()
-```
-
-```{r data prep nice names}
-names(points)
-#  [1] "LOCATIONID" "solar_sum"  "solar_wint" "ruggedness" "dem"        "OBJECTID"   "id"        
-#  [8] "lon"        "lat"        "time"       "Region"     "count"      "orgnl_d"    "observr"   
-# [15] "notes"      "slope"      "aspect"     "Presence"   "count1"     "count5"     "X"         
-# [22] "Y"          "geometry"   "groupID"   
-nice_names_raw <- tibble(original_names = names(points), 
-                         txt = c("LOCATIONID", "Solar Radiation, Summer", "Solar Radiation, Winter",  "Terrain Ruggedness", "Elevation",  "OBJECTID",   "id", "Longitude",   "Latitude", "time",  "Region",  "Scat count (m-2)", "orgnl_d",    "observr",    "notes",   "Terrain Slope", "Terrain Aspect","Scat Presence", "Scat count + 1", "Scat class", "x", "y", "geometry", "Group ID"))
-nice_names_raw
-
-names(points30)
-#  [1] "pointid"           "count"         "X"                 "Y"                
-#  [5] "directSolarSummer" "directSolarWinter" "rugged_clip"       "jaxa_dem"         
-#  [9] "NEW_jaxa_clip"     "Slope_NEW_DEM"     "Aspect_NEW_DEM"    "Current_Bio_1"    
-# [13] "Current_Bio12"     "Current_YFRW_SDM"  "Presence"          "count1"           
-# [17] "count5"            "Region"            "geometry"          "groupID"          
-nice_names <- tibble(original_names = names(points30),
-                       names = c("pointid", "count", "X", "Y", "solar_sum", "solar_wint", "ruggedness",  "jaxa_dem", "dem",  "slope",  "aspect", "T", "rain", "YFRW_SDM", "Presence", "count1", "count5", "Region", "geometry", "groupID"),
-                       txt = c("pointid", "Scat count (m-2)", "x", "y", 
-  "Solar Radiation, Summer", "Solar Radiation, Winter",  "Terrain Ruggedness",  "jaxa_dem", 
-  "Elevation",  "Terrain Slope",  "Terrain Aspect", "Temperature", "Rainfall", 
-  "YFRW SDM, Current Climate", "Scat Presence", "Scat count + 1", "Scat class", "Region", "geometry", "Group ID"))
-names(points30) <- nice_names$names
-nice_names
-
-write_sf(points, "../../final/all_obs.shp", overwrite = TRUE)
-write_sf(points30, "../../final/all_30.shp", overwrite = TRUE)
 
 # create nice colours for Flinders and Olary
-if(nrow(sites30) == 5) {
+ngroups <- length(unique(all$groupID))
+if(ngroups == 5) {
   site_colours <- mycols_wes[c(2,12,5,6,14)]
 } else {
   # automatic for variable numbers
-  fg_sites <- points %>% 
-    st_drop_geometry() %>%
+  fg_sites <- all %>% 
     filter(Region == "Flinders_Gammon_Ranges") %>% 
     select(groupID) %>% pull() %>%
     unique() 
   ol_sites <- points %>% 
-    st_drop_geometry() %>%
     filter(Region == "Olary_Ranges") %>% 
     select(groupID) %>% pull %>%
     unique()
@@ -163,214 +281,25 @@ if(nrow(sites30) == 5) {
   # create colours for sites
   site_colours <- c(flinders_cols, olary_cols)
 }
-scales::show_col(site_colours)
-
-mapview(points, zcol = "groupID", alpha = .2, col.regions = site_colours)
-mapview(points30, zcol = "groupID", alpha = .2, col.regions = site_colours)
-ggsave("points30_groups.jpg", width = 15, height = 12, units = "cm", dpi = 1200 )
-
-# create a copy with a short name and geometry dropped
-all <- points30 %>%
-  st_drop_geometry()
-all$Region <- as.factor(all$Region)
-
-
-
-
-
-# First series of model testing - single factors
-
-```{r series 1 - dem}
-F0D <- gam(log(count1) ~ s(dem) + Region , data = all,  method = "REML", family = tw())
-summary(F0D)
-FP <- getViz(F0D)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
 ```
 
-```{r series 1 - ruggedness}
-F0R <- gam(log(count1) ~ s(ruggedness) + Region , data = all,  method = "REML", family = tw())
-summary(F0R)
-FP <- getViz(F0R)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-```{r series 1 - slope}
-F0S <- gam(log(count1) ~ s(slope) + Region , data = all,  method = "REML", family = tw())
-summary(F0S)
-FP <- getViz(F0S)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-
-```{r series 1 - aspect}
-F0A <- gam(log(count1) ~ s(aspect) + Region , data = all,  method = "REML", family = tw())
-summary(F0A)
-FP <- getViz(F0A)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-
-```{r series 1 - solar wint}
-F0SW <- gam(log(count1) ~ s(solar_wint) + Region , data = all,  method = "REML", family = tw())
-summary(F0SW)
-FP <- getViz(F0SW)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-
-```{r series 1 - solar sum}
-F0SS <- gam(log(count1) ~ s(solar_sum) + Region , data = all,  method = "REML", family = tw())
-summary(F0SS)
-FP <- getViz(F0SS)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-
-# Second series of model testing - multifactorial 
-
-```{r series 2 - Base model}
-FBase <- gam(log(count1) ~ s(dem) +s(ruggedness) + Region , data = all,  method = "REML", family = tw())
-summary(FBase)
-FP <- getViz(FBase)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-
-```
-
-```{r series 2 - Base + slope}
-FDRS <- gam(log(count1) ~ s(dem) + s(ruggedness) + s(slope) + Region , data = all,  method = "REML", family = tw())
-FP <- getViz(FDRS)
-summary(FDRS)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-anova.gam(FBase, FDRS, test = "F")
-
-
-```{r series 2 - Base + aspect}
-F4a <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(aspect) + Region, data = all,  method = "REML", family = tw())
-summary(F4a)
-FP <- getViz(F4a)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-anova.gam(FBase, F4a, test = "F")
-```
-
-```{r series 2 - Base + winter solar radiation}
-F4b <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(solar_wint) + Region, data = all,  method = "REML", family = tw())
-summary(F4b)
-FP <- getViz(F4b)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-anova.gam(FBase, F4b, test = "F")
-```
-
-```{r series 2 - Base + summer solar radiation}
-F4c <- gam(log(count1) ~ s(dem) +  s(ruggedness) + s(solar_sum) + Region, data = all,  method = "REML", family = tw())
-summary(F4c)
-FP <- getViz(F4c)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-anova.gam(FBase, F4c, test = "F")
-```
-
-```{r series 2 - Base + dem/ruggedness interaction - FINAL MODEL}
-F3 <- gam(log(count1) ~ s(dem) + s(ruggedness) + te(dem, ruggedness) + Region , data = all,  method = "REML", family = tw())
-summary(F3)
-FP <- getViz(F3)
-print(plot(FP, allTerms = T), pages = 1)
-gam.check(FP)
-anova.gam(FBase, F3, test = "F")
-```
-
-## Visualisation of scat counts by region
-```{r Figure of presence/absence using dem and ruggednes}
-
-vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "ruggedness")) 
-lables <- nice_names$txt[vars]
-
-all %>%
-  filter(Region != "Flinders_Gammon_Ranges") %>%
-  mutate(Presence = as.factor(count > 0)) %>%
-  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
-  geom_point(alpha = 0.5) + 
-  scale_color_manual(values=c('#E69F00', 'darkblue')) +
-  scale_shape_manual(values=c(16, 3))+
-  scale_size_manual(values=c(.5, 1))+
-  labs(x = lables[1], y = lables[2], title = "Olary Ranges") +
-  theme(legend.position="bottom") + 
-  theme_minimal()
-ggsave("dem_rug_OL.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
-
-all %>%
-  filter(Region == "Flinders_Gammon_Ranges") %>%
-  mutate(Presence = as.factor(count > 0)) %>%
-  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
-  geom_point(alpha = 0.5) + 
-  scale_color_manual(values=c('#E69F00', 'darkblue')) +
-  scale_shape_manual(values=c(16, 3))+
-  scale_size_manual(values=c(.5, 1))+
-  labs(x = lables[1], y = lables[2], title = "Flinders/Gammon Ranges") +
-  theme(legend.position="bottom") + 
-  theme_minimal()
-ggsave("dem_rug_FG.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
-
-all %>%
-  mutate(Presence = as.factor(count > 0)) %>%
-  ggplot(aes(x=dem, y=ruggedness, size = Presence, shape = Presence, colour = Presence)) +
-  geom_point(alpha = 0.5) + 
-  scale_color_manual(values=c('#E69F00', 'darkblue')) +
-  scale_shape_manual(values=c(16, 3))+
-  scale_size_manual(values=c(.5, 1))+
-  labs(x = lables[1], y = lables[2], title = "Entire area") +
-  theme(legend.position="bottom") + 
-  theme_minimal()
-ggsave("dem_rug_all.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
-
-```
-
-
-##Appendix Figures
-## Correlation of variables
-
-```{r Appendix Figure S7- correlation matrix by GroupID}
+```{r correlation matrix by Region and GroupID}
 # remove sites with low number of members and take sample for better visualisation
 
-all_select <- points30 %>%
-  st_drop_geometry() %>%
+all_select <- all %>%
+  # filter(groupID %in% which(sites$n > 200)) %>%
   sample_n(1000) %>%
   droplevels
 
-scatterplotMatrix(~log(count1)+dem+ruggedness+slope+aspect+solar_sum+solar_wint|groupID, 
+suppressWarnings(scatterplotMatrix(~log(count1)+Temperature+Rainfall+dem+ruggedness+aspect+slope+solar_sum+solar_wint|Region, 
                   data=all_select,
-                  col=site_colours,
+                  col=c('#E69F00', 'darkblue'),
                   regLine=F,
-                  smooth = list(method=gamLine, k=30),
+                  # smooth = list(method=gamLine, k=30),
                   cex=0.2,
-                  main="Scatter plot by spatial group - 30m resampled"
+                  main="Scatter plot for Flinders_Gammon_Ranges (sand) Olary_Ranges (blue)"
   )
-
-```
-
-```{r Appendix Figure S9- dem and ruggedness for all five groups}
-vars <- c(which(nice_names$names == "dem"), which(nice_names$names == "ruggedness")) 
-lables <- nice_names$txt[vars]
-
-all %>%
-  ggplot(aes(x=dem, y=ruggedness, shape = Presence, size = log(count1), colour = groupID)) +
-  geom_point(alpha = .5) + 
-  scale_color_manual(values=site_colours) +
-  scale_shape_manual(values=c(16, 3))+
-  scale_size_continuous(range = c(0.1, 2)) +
-  labs(x = lables[1], y = lables[2], title = "Entire region") +
-  theme(legend.position="bottom") +   theme_minimal()
-ggsave("dem_rug_allgroups.jpg", width = 15, height = 10, units = "cm", dpi = 1200 )
+)
 
 ```
 
